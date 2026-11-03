@@ -98,31 +98,15 @@ SPEEDS = {
 }
 
 # --- DPI ------------------------------------------------------------------- #
-# Factory tables for both profiles. Bytes 7..9 and 40..63 are not fully
-# decoded, so every write starts from the profile's factory table and patches
-# only the two bytes of the stage being changed.
-PROFILE_DPI_DEFAULT = {
-    1: bytes([
-        0x0F, 0x00, 0x1E, 0x0A, 0x19, 0x19, 0x05, 0x04,
-        0x06, 0x10, 0x64, 0x64, 0x01, 0xC0, 0xF0, 0x03,
-        0x01, 0x01, 0x19, 0x19, 0x22, 0x39, 0x5C, 0xD0,
-        0xF3, 0x5C, 0x73, 0x00, 0x22, 0x39, 0x5C, 0xD0,
-        0xF3, 0x5C, 0x73, 0x00, 0x1F, 0xFF, 0x00, 0x00,
-        0x31, 0x00, 0x00, 0x00, 0x31, 0x00, 0x00, 0x00,
-        0x31, 0x31, 0x31, 0x00, 0x31, 0x00, 0x31, 0x00,
-        0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31,
-    ]),
-    2: bytes([
-        0x0F, 0x00, 0x1E, 0x0A, 0x19, 0x19, 0x05, 0x01,
-        0x01, 0x03, 0x64, 0x64, 0x01, 0xC0, 0xF0, 0x03,
-        0x01, 0x01, 0x19, 0x19, 0x22, 0x39, 0x5C, 0xD0,
-        0xF3, 0x5C, 0x73, 0x00, 0x22, 0x39, 0x5C, 0xD0,
-        0xF3, 0x5C, 0x73, 0x00, 0x1F, 0xFF, 0x00, 0x00,
-        0x00, 0x00, 0x31, 0x00, 0x00, 0x31, 0x00, 0x00,
-        0x31, 0x00, 0x00, 0x31, 0x00, 0x00, 0x31, 0x00,
-        0x00, 0x31, 0x00, 0x00, 0x31, 0x00, 0x00, 0x31,
-    ]),
-}
+# DPI stage bytes live in the SAME 64-byte packet as the lighting fields.
+# Confirmed on hardware: writing a DPI table applies its lighting block
+# (bytes 7..9 and 40..63), and writing a lighting packet applies its DPI bytes.
+# Both factory profiles use the same five stage bytes, so one template covers
+# them.
+#
+# These values encode to exactly the factory bytes (22 39 5c d0 f3), so
+# applying them leaves the out-of-the-box DPI registers unchanged.
+DPI_FACTORY_STAGES = (1520, 2500, 4000, 7000, 10000)
 
 # stage number -> (X byte offset, Y byte offset)
 DPI_STAGE_OFFSETS = {
@@ -186,33 +170,12 @@ def set_dpi_stage(profile: int, stage: int) -> bytes:
     return command(OP_DPI_STAGE, profile, stage)
 
 
-# --- LED payload ----------------------------------------------------------- #
-def _patch_mode_block(payload: bytearray, mode: int, speed: int, param: int) -> None:
-    index = payload.find(bytes([0x19, 0x19, 0x05]))
-    if index < 0:
-        raise ProtocolError("в базовом LED-пакете не найден блок режима 19 19 05")
-    payload[index + 3] = mode
-    payload[index + 4] = speed
-    payload[index + 5] = param
-
-
-def _patch_tail(payload: bytearray, rgb: tuple[int, int, int] | None) -> None:
-    if rgb is None:
-        payload[40:64] = bytes(24)
-        return
-    payload[40:64] = bytes(rgb) * 8
-
-
-def build_lighting_payload(mode: str, color: str = "red",
-                           brightness: str = "high",
-                           speed: str = "mid") -> bytes:
-    """Return the 64-byte LED payload for a mode from the config."""
-    payload = bytearray(BASE_PAYLOAD)
-
+# --- 64-byte config packet ------------------------------------------------- #
+def _lighting_fields(mode: str, color: str, brightness: str,
+                     speed: str) -> tuple[int, int, int, bytes]:
+    """Validate lighting settings and return (mode, speed, param, tail)."""
     if mode == "off":
-        _patch_mode_block(payload, MODE_OFF, 0x00, 0x00)
-        _patch_tail(payload, None)
-        return bytes(payload)
+        return MODE_OFF, 0x00, 0x00, bytes(24)
 
     if mode == "static":
         if color not in COLORS:
@@ -226,9 +189,8 @@ def build_lighting_payload(mode: str, color: str = "red",
             )
         tier, on = BRIGHTNESS[brightness]
         mask = COLORS[color]
-        _patch_mode_block(payload, MODE_STATIC, tier, 0x03)
-        _patch_tail(payload, tuple(on if channel else 0 for channel in mask))
-        return bytes(payload)
+        rgb = tuple(on if channel else 0 for channel in mask)
+        return MODE_STATIC, tier, 0x03, bytes(rgb) * 8
 
     if mode not in EFFECTS:
         raise ProtocolError(
@@ -241,8 +203,47 @@ def build_lighting_payload(mode: str, color: str = "red",
             f"{', '.join(SPEEDS[mode])})"
         )
     effect_mode, param = EFFECTS[mode]
-    _patch_mode_block(payload, effect_mode, SPEEDS[mode][speed], param)
-    payload[40:64] = EFFECT_TAIL
+    return effect_mode, SPEEDS[mode][speed], param, EFFECT_TAIL
+
+
+def _patch_lighting(payload: bytearray, mode: str, color: str,
+                    brightness: str, speed: str) -> None:
+    mode_byte, speed_byte, param, tail = _lighting_fields(
+        mode, color, brightness, speed)
+    index = payload.find(bytes([0x19, 0x19, 0x05]))
+    if index < 0:
+        raise ProtocolError("в 64-байтовом пакете не найден блок режима 19 19 05")
+    payload[index + 3] = mode_byte
+    payload[index + 4] = speed_byte
+    payload[index + 5] = param
+    payload[40:64] = tail
+
+
+def _patch_dpi(payload: bytearray, stages: list[int] | tuple[int, ...]) -> None:
+    if len(stages) != 5:
+        raise ProtocolError(
+            f"нужно ровно 5 DPI-стадий, получено {len(stages)}"
+        )
+    for stage, dpi in enumerate(stages, start=1):
+        value = dpi_to_byte(int(dpi))
+        x_offset, y_offset = DPI_STAGE_OFFSETS[stage]
+        payload[x_offset] = value
+        payload[y_offset] = value
+
+
+def build_config_payload(mode: str = "off", color: str = "red",
+                         brightness: str = "high", speed: str = "mid",
+                         dpi_stages: list[int] | tuple[int, ...] | None = None
+                         ) -> bytes:
+    """Build the single 64-byte packet that carries lighting AND DPI.
+
+    The device stores both subsystems in one packet, so every write specifies
+    both. ``dpi_stages=None`` keeps the factory DPI bytes of the template.
+    """
+    payload = bytearray(BASE_PAYLOAD)
+    _patch_lighting(payload, mode, color, brightness, speed)
+    if dpi_stages is not None:
+        _patch_dpi(payload, dpi_stages)
     return bytes(payload)
 
 
@@ -251,7 +252,7 @@ def primer() -> bytes:
     return bytes([0xFF, 0xFF]) + bytes(PAYLOAD_SIZE - 2)
 
 
-# --- DPI payload ----------------------------------------------------------- #
+# --- DPI encoding ---------------------------------------------------------- #
 def dpi_to_byte(dpi: int) -> int:
     """Map a DPI value to the byte stored in the DPI table."""
     if not (DPI_CALIBRATION[0][0] <= dpi <= DPI_CALIBRATION[-1][0]):
@@ -265,28 +266,12 @@ def dpi_to_byte(dpi: int) -> int:
     return DPI_CALIBRATION[-1][1]
 
 
-def build_dpi_payload(profile: int, stages: list[int] | tuple[int, ...]) -> bytes:
-    """Patch all five stage values into the profile's factory DPI table."""
-    if len(stages) != 5:
-        raise ProtocolError(
-            f"нужно ровно 5 DPI-стадий, получено {len(stages)}"
-        )
-    payload = bytearray(PROFILE_DPI_DEFAULT[profile])
-    for stage, dpi in enumerate(stages, start=1):
-        value = dpi_to_byte(int(dpi))
-        x_offset, y_offset = DPI_STAGE_OFFSETS[stage]
-        payload[x_offset] = value
-        payload[y_offset] = value
-    return bytes(payload)
-
-
 @dataclass(frozen=True)
-class LedSummary:
+class LightingSummary:
     mode: str
     color: str
     brightness: str
     speed: str
-    payload: bytes
 
     def describe(self) -> str:
         if self.mode == "off":
@@ -298,6 +283,7 @@ class LedSummary:
 
 
 def describe_lighting(mode: str, color: str = "red",
-                      brightness: str = "high", speed: str = "mid") -> LedSummary:
-    return LedSummary(mode, color, brightness, speed,
-                      build_lighting_payload(mode, color, brightness, speed))
+                      brightness: str = "high",
+                      speed: str = "mid") -> LightingSummary:
+    _lighting_fields(mode, color, brightness, speed)  # validate early
+    return LightingSummary(mode, color, brightness, speed)

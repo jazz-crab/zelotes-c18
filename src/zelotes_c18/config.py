@@ -27,7 +27,6 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True)
 class LightingConfig:
-    enabled: bool = True
     mode: str = "off"
     color: str = "red"
     brightness: str = "high"
@@ -42,9 +41,8 @@ class PollingConfig:
 
 @dataclass(frozen=True)
 class DpiConfig:
-    enabled: bool = True
     active_stage: int = 1
-    stages: tuple[int, ...] = (800, 1200, 1600, 2400, 3200)
+    stages: tuple[int, ...] = (1520, 2500, 4000, 7000, 10000)
 
 
 @dataclass(frozen=True)
@@ -108,40 +106,38 @@ class Config:
             raise ConfigError("profile.targets не может быть пустым")
         if self.profile_select not in VALID_PROFILES:
             raise ConfigError("profile.select должен быть 1 или 2")
-        if self.lighting.enabled:
-            if self.lighting.mode not in LIGHTING_MODES:
+        if self.lighting.mode not in LIGHTING_MODES:
+            raise ConfigError(
+                f"lighting.mode: неизвестный режим {self.lighting.mode!r} "
+                f"(есть: {', '.join(LIGHTING_MODES)})"
+            )
+        if self.lighting.mode == "static":
+            if self.lighting.color not in COLORS:
                 raise ConfigError(
-                    f"lighting.mode: неизвестный режим {self.lighting.mode!r} "
-                    f"(есть: {', '.join(LIGHTING_MODES)})"
+                    f"lighting.color: неизвестный цвет {self.lighting.color!r} "
+                    f"(есть: {', '.join(COLORS)})"
                 )
-            if self.lighting.mode == "static":
-                if self.lighting.color not in COLORS:
-                    raise ConfigError(
-                        f"lighting.color: неизвестный цвет {self.lighting.color!r} "
-                        f"(есть: {', '.join(COLORS)})"
-                    )
-                if self.lighting.brightness not in BRIGHTNESS:
-                    raise ConfigError(
-                        "lighting.brightness: ожидалось high/mid/low"
-                    )
-            if self.lighting.mode in SPEEDS:
-                if self.lighting.speed not in SPEEDS[self.lighting.mode]:
-                    raise ConfigError(
-                        f"lighting.speed: для {self.lighting.mode} ожидалось "
-                        f"{'/'.join(SPEEDS[self.lighting.mode])}"
-                    )
+            if self.lighting.brightness not in BRIGHTNESS:
+                raise ConfigError(
+                    "lighting.brightness: ожидалось high/mid/low"
+                )
+        if self.lighting.mode in SPEEDS:
+            if self.lighting.speed not in SPEEDS[self.lighting.mode]:
+                raise ConfigError(
+                    f"lighting.speed: для {self.lighting.mode} ожидалось "
+                    f"{'/'.join(SPEEDS[self.lighting.mode])}"
+                )
         if self.polling.enabled and self.polling.hz not in POLLING_INTERVALS:
             raise ConfigError(
                 f"polling.hz: поддерживается {', '.join(str(h) for h in POLLING_INTERVALS)}"
             )
-        if self.dpi.enabled:
-            if not (1 <= self.dpi.active_stage <= 5):
-                raise ConfigError("dpi.active_stage должен быть 1..5")
-            if len(self.dpi.stages) != 5:
-                raise ConfigError("dpi.stages должен содержать ровно 5 значений")
-            for value in self.dpi.stages:
-                if not (200 <= value <= 10000):
-                    raise ConfigError("dpi.stages: каждое значение 200..10000")
+        if not (1 <= self.dpi.active_stage <= 5):
+            raise ConfigError("dpi.active_stage должен быть 1..5")
+        if len(self.dpi.stages) != 5:
+            raise ConfigError("dpi.stages должен содержать ровно 5 значений")
+        for value in self.dpi.stages:
+            if not (200 <= value <= 10000):
+                raise ConfigError("dpi.stages: каждое значение 200..10000")
 
 
 # --------------------------------------------------------------------------- #
@@ -186,7 +182,6 @@ def _as_profiles(value, where: str) -> tuple[int, ...]:
 
 def _lighting(raw: dict) -> LightingConfig:
     return LightingConfig(
-        enabled=_as_bool(raw.get("enabled", True), "lighting.enabled"),
         mode=str(raw.get("mode", "off")).lower(),
         color=str(raw.get("color", "red")).lower(),
         brightness=str(raw.get("brightness", "high")).lower(),
@@ -202,11 +197,10 @@ def _polling(raw: dict) -> PollingConfig:
 
 
 def _dpi(raw: dict) -> DpiConfig:
-    stages = raw.get("stages", [800, 1200, 1600, 2400, 3200])
+    stages = raw.get("stages", [1520, 2500, 4000, 7000, 10000])
     if not isinstance(stages, (list, tuple)):
         raise ConfigError("dpi.stages: ожидался список из 5 значений")
     return DpiConfig(
-        enabled=_as_bool(raw.get("enabled", True), "dpi.enabled"),
         active_stage=_as_int(raw.get("active_stage", 1), "dpi.active_stage"),
         stages=tuple(_as_int(v, "dpi.stages") for v in stages),
     )

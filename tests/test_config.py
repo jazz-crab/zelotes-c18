@@ -17,7 +17,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.profile_select, 1)
         self.assertEqual(cfg.lighting.mode, "off")
         self.assertEqual(cfg.polling.hz, 1000)
-        self.assertEqual(cfg.dpi.stages, (800, 1200, 1600, 2400, 3200))
+        self.assertEqual(cfg.dpi.stages, (1520, 2500, 4000, 7000, 10000))
 
     def test_profiles_can_be_both(self):
         cfg = Config.from_dict(

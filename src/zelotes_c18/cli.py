@@ -16,8 +16,7 @@ from .device import (
 )
 from .protocol import (
     ProtocolError,
-    build_dpi_payload,
-    build_lighting_payload,
+    build_config_payload,
     describe_lighting,
     set_dpi_stage,
     set_polling,
@@ -43,8 +42,6 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("apply", help="привести мышь к конфигу")
     p.add_argument("--yes", action="store_true",
                    help="реально писать (без флага — dry-run)")
-    p.add_argument("--no-light", action="store_true", help="не трогать подсветку")
-    p.add_argument("--no-dpi", action="store_true", help="не трогать DPI")
     p.add_argument("--no-polling", action="store_true",
                    help="не трогать частоту опроса")
     _add_profile_flags(p)
@@ -87,17 +84,13 @@ def print_config(cfg: Config) -> None:
     print(f"  конфиг: {cfg.path}")
     print(f"  профили записи: {', '.join(map(str, cfg.profile_targets))}; "
           f"активный после записи: {cfg.profile_select}")
-    if light.enabled:
-        summary = describe_lighting(light.mode, light.color, light.brightness,
-                                    light.speed)
-        print(f"  подсветка: {summary.describe()}")
-    else:
-        print("  подсветка: не настраивается (lighting.enabled = false)")
+    summary = describe_lighting(light.mode, light.color, light.brightness,
+                                light.speed)
+    print(f"  подсветка: {summary.describe()}")
     if cfg.polling.enabled:
         print(f"  опрос: {cfg.polling.hz} Гц")
-    if cfg.dpi.enabled:
-        print(f"  DPI: стадии {', '.join(map(str, cfg.dpi.stages))}; "
-              f"активная {cfg.dpi.active_stage}")
+    print(f"  DPI: стадии {', '.join(map(str, cfg.dpi.stages))}; "
+          f"активная {cfg.dpi.active_stage}")
 
 
 def cmd_status(cfg: Config, args) -> int:
@@ -176,38 +169,27 @@ def warn_no_readback() -> None:
 def cmd_apply(cfg: Config, args) -> int:
     targets = targets_from(cfg, args)
     select = select_from(cfg, args)
-    want_light = cfg.lighting.enabled and not args.no_light
-    want_dpi = cfg.dpi.enabled and not args.no_dpi
     want_polling = cfg.polling.enabled and not args.no_polling
 
-    light_summary = None
-    light_payload = None
-    if want_light:
-        light_summary = describe_lighting(cfg.lighting.mode, cfg.lighting.color,
-                                          cfg.lighting.brightness,
-                                          cfg.lighting.speed)
-        light_payload = light_summary.payload
+    light = describe_lighting(cfg.lighting.mode, cfg.lighting.color,
+                              cfg.lighting.brightness, cfg.lighting.speed)
+    stages = list(cfg.dpi.stages)
+    payload = build_config_payload(light.mode, light.color, light.brightness,
+                                   light.speed, stages)
 
     print("План:")
     print(f"  профили записи: {', '.join(map(str, targets))}; "
           f"активный после записи: {select}")
-    if light_summary:
-        print(f"  подсветка: {light_summary.describe()}")
-    else:
-        print("  подсветка: пропущена")
-    if want_dpi:
-        print(f"  DPI: стадии {', '.join(map(str, cfg.dpi.stages))}; "
-              f"активная {cfg.dpi.active_stage}")
-    else:
-        print("  DPI: пропущено")
+    print(f"  подсветка: {light.describe()}")
+    print(f"  DPI: стадии {', '.join(map(str, cfg.dpi.stages))}; "
+          f"активная {cfg.dpi.active_stage}")
     if want_polling:
         print(f"  опрос: {cfg.polling.hz} Гц")
     else:
         print("  опрос: пропущен")
 
-    if light_payload is not None:
-        print("  LED payload (64 байта):")
-        _print_hex(light_payload, indent="    ")
+    print("  Пакет (64 байта: подсветка + DPI):")
+    _print_hex(payload, indent="    ")
 
     if not args.yes:
         print("\nDRY-RUN: ничего не записано. Добавь --yes, чтобы залить.")
@@ -219,16 +201,12 @@ def cmd_apply(cfg: Config, args) -> int:
         print(f"\nУстройство: {mouse.describe()}")
         for profile in targets:
             print(f"\n== профиль {profile} ==")
-            if light_payload is not None:
-                mouse.transaction(profile, light_payload)
-                print(f"  подсветка: {light_summary.describe()}")
-            if want_dpi:
-                dpi_payload = build_dpi_payload(profile, list(cfg.dpi.stages))
-                mouse.transaction(profile, dpi_payload,
-                                  extra=(set_dpi_stage(profile,
-                                                       cfg.dpi.active_stage),))
-                print(f"  DPI: {', '.join(map(str, cfg.dpi.stages))}, "
-                      f"активная {cfg.dpi.active_stage}")
+            mouse.transaction(profile, payload,
+                              extra=(set_dpi_stage(profile,
+                                                   cfg.dpi.active_stage),))
+            print(f"  подсветка: {light.describe()}")
+            print(f"  DPI: {', '.join(map(str, cfg.dpi.stages))}, "
+                  f"активная {cfg.dpi.active_stage}")
             if want_polling:
                 mouse.transaction(profile, None,
                                   extra=(set_polling(profile, cfg.polling.hz),))
@@ -243,11 +221,11 @@ def cmd_apply(cfg: Config, args) -> int:
 def cmd_off(cfg: Config, args) -> int:
     targets = targets_from(cfg, args)
     select = select_from(cfg, args)
-    payload = build_lighting_payload("off")
-    print("План: выключить подсветку (mode 0x00) и очистить RGB-хвост")
+    payload = build_config_payload("off", dpi_stages=list(cfg.dpi.stages))
+    print("План: выключить подсветку (mode 0x00), DPI-байты — из конфига")
     print(f"  профили: {', '.join(map(str, targets))}; "
           f"активный после записи: {select}")
-    print("  LED payload (64 байта):")
+    print("  Пакет (64 байта: подсветка + DPI):")
     _print_hex(payload, indent="    ")
 
     if not args.yes:
