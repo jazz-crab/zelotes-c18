@@ -23,6 +23,7 @@ from .protocol import (
     PAYLOAD_SIZE,
     REPORT_SIZE,
     commit,
+    prepare_buttons,
     prepare_table,
     primer,
 )
@@ -214,6 +215,15 @@ class Mouse:
             self.write_payload(payload, delay=0.040)
         for packet in extra:
             self.send_command(packet)
+        self.send_command(commit(profile), delay=0.050)
+
+    def transaction_buttons(self, profile: int, table: bytes) -> None:
+        """begin -> 0x0D -> 64-byte table (no primer) -> commit."""
+        if len(table) != PAYLOAD_SIZE:
+            raise ValueError(f"таблица кнопок должна быть {PAYLOAD_SIZE} байт")
+        self.send_command(BEGIN)
+        self.send_command(prepare_buttons(profile))
+        self.write_payload(table, delay=0.040)
         self.send_command(commit(profile), delay=0.050)
 
     # --- read-only diagnostics --------------------------------------------- #

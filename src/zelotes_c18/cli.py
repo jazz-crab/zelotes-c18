@@ -16,6 +16,7 @@ from .device import (
 )
 from .protocol import (
     ProtocolError,
+    build_button_table,
     build_config_payload,
     describe_lighting,
     set_dpi_stage,
@@ -91,6 +92,13 @@ def print_config(cfg: Config) -> None:
         print(f"  опрос: {cfg.polling.hz} Гц")
     print(f"  DPI: стадии {', '.join(map(str, cfg.dpi.stages))}; "
           f"активная {cfg.dpi.active_stage}")
+    print(f"  кнопки: {_format_buttons(cfg.buttons)}")
+
+
+def _format_buttons(buttons: dict[int, str]) -> str:
+    if not buttons:
+        return "заводские"
+    return "; ".join(f"{slot} → {spec}" for slot, spec in sorted(buttons.items()))
 
 
 def cmd_status(cfg: Config, args) -> int:
@@ -176,6 +184,7 @@ def cmd_apply(cfg: Config, args) -> int:
     stages = list(cfg.dpi.stages)
     payload = build_config_payload(light.mode, light.color, light.brightness,
                                    light.speed, stages)
+    button_table = build_button_table(cfg.buttons)
 
     print("План:")
     print(f"  профили записи: {', '.join(map(str, targets))}; "
@@ -183,6 +192,7 @@ def cmd_apply(cfg: Config, args) -> int:
     print(f"  подсветка: {light.describe()}")
     print(f"  DPI: стадии {', '.join(map(str, cfg.dpi.stages))}; "
           f"активная {cfg.dpi.active_stage}")
+    print(f"  кнопки: {_format_buttons(cfg.buttons)}")
     if want_polling:
         print(f"  опрос: {cfg.polling.hz} Гц")
     else:
@@ -207,6 +217,8 @@ def cmd_apply(cfg: Config, args) -> int:
             print(f"  подсветка: {light.describe()}")
             print(f"  DPI: {', '.join(map(str, cfg.dpi.stages))}, "
                   f"активная {cfg.dpi.active_stage}")
+            mouse.transaction_buttons(profile, button_table)
+            print(f"  кнопки: {_format_buttons(cfg.buttons)}")
             if want_polling:
                 mouse.transaction(profile, None,
                                   extra=(set_polling(profile, cfg.polling.hz),))

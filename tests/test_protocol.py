@@ -9,13 +9,17 @@ sys.path.insert(0, str(REPO / "src"))
 from zelotes_c18.protocol import (  # noqa: E402
     BASE_PAYLOAD,
     BEGIN,
+    BUTTON_DEFAULT_TABLE,
     DPI_FACTORY_STAGES,
     DPI_STAGE_OFFSETS,
     EFFECT_TAIL,
+    build_button_table,
     build_config_payload,
     checksum,
     commit,
     dpi_to_byte,
+    parse_button_action,
+    prepare_buttons,
     prepare_table,
     set_dpi_stage,
     set_polling,
@@ -37,12 +41,16 @@ class CommandTests(unittest.TestCase):
         packets = [
             BEGIN, prepare_table(1), prepare_table(2), commit(1), commit(2),
             set_polling(1, 125), set_polling(1, 1000),
-            set_dpi_stage(2, 5),
+            set_dpi_stage(2, 5), prepare_buttons(1), prepare_buttons(2),
         ]
         for packet in packets:
             self.assertEqual(len(packet), 8)
             self.assertEqual(sum(packet), 0xFF)
             self.assertEqual(packet[-1], checksum(packet))
+
+    def test_prepare_buttons(self):
+        self.assertEqual(prepare_buttons(1).hex(), "0d01800000000071")
+        self.assertEqual(prepare_buttons(2).hex(), "0d02800000000070")
 
 
 class ConfigPacketTests(unittest.TestCase):
@@ -115,6 +123,43 @@ class DpiTests(unittest.TestCase):
             dpi_to_byte(100)
         with self.assertRaises(Exception):
             build_config_payload("off", dpi_stages=[800, 1200, 1600])
+
+
+class ButtonTests(unittest.TestCase):
+    def test_actions(self):
+        self.assertEqual(parse_button_action("click:left"), (0x0001, 0xF0))
+        self.assertEqual(parse_button_action("key:enter"), (0x0000, 0x28))
+        self.assertEqual(parse_button_action("shortcut:ctrl+c"),
+                         (0x0100, 0x06))
+        self.assertEqual(parse_button_action("shortcut:win+shift+s"),
+                         (0x0A00, 0x16))
+        self.assertEqual(parse_button_action("media:play-pause"),
+                         (0x0003, 0xCD))
+        self.assertEqual(parse_button_action("dpi:cycle"), (0x0007, 0x03))
+        self.assertEqual(parse_button_action("none"), (0x0000, 0x0000))
+
+    def test_bad_actions(self):
+        for spec in ("nope", "click:sideways", "shortcut:ctrl",
+                     "media:rewind", "key:ж", "dpi:sideways"):
+            with self.assertRaises(Exception, msg=spec):
+                parse_button_action(spec)
+
+    def test_default_table_is_stable(self):
+        self.assertEqual(build_button_table(), BUTTON_DEFAULT_TABLE)
+        self.assertEqual(len(BUTTON_DEFAULT_TABLE), 64)
+
+    def test_patch_slots(self):
+        table = build_button_table({4: "shortcut:ctrl+v",
+                                    11: "key:printscreen"})
+        # button 4 lives at offset 12, button 11 at offset 24
+        self.assertEqual(table[12:16], bytes([0x00, 0x01, 0x19, 0x00]))
+        self.assertEqual(table[24:28], bytes([0x00, 0x00, 0x46, 0x00]))
+        # untouched buttons keep factory assignments
+        self.assertEqual(table[0:4], BUTTON_DEFAULT_TABLE[0:4])
+
+    def test_bad_slot(self):
+        with self.assertRaises(Exception):
+            build_button_table({12: "key:enter"})
 
 
 if __name__ == "__main__":

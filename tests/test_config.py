@@ -16,8 +16,12 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.profile_targets, (1, 2))
         self.assertEqual(cfg.profile_select, 1)
         self.assertEqual(cfg.lighting.mode, "off")
+        self.assertEqual(cfg.polling.enabled, False)
         self.assertEqual(cfg.polling.hz, 1000)
-        self.assertEqual(cfg.dpi.stages, (1520, 2500, 4000, 7000, 10000))
+        self.assertEqual(cfg.dpi.stages, (2500, 2500, 2500, 2500, 2500))
+        self.assertEqual(len(cfg.buttons), 11)
+        self.assertEqual(cfg.buttons[4], "shortcut:ctrl+v")
+        self.assertEqual(cfg.buttons[11], "key:printscreen")
 
     def test_profiles_can_be_both(self):
         cfg = Config.from_dict(
@@ -46,6 +50,23 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             Config.from_dict(
                 {"profile": {"targets": [3]}}, Path("test.toml"))
+
+    def test_buttons_override(self):
+        cfg = Config.from_dict(
+            {"buttons": {7: "shortcut:alt+tab", 8: "key:enter"}},
+            Path("test.toml"),
+        )
+        self.assertEqual(cfg.buttons, {7: "shortcut:alt+tab", 8: "key:enter"})
+
+    def test_bad_button_action(self):
+        with self.assertRaises(ConfigError):
+            Config.from_dict(
+                {"buttons": {7: "teleport"}}, Path("test.toml"))
+
+    def test_bad_button_number(self):
+        with self.assertRaises(ConfigError):
+            Config.from_dict(
+                {"buttons": {12: "key:enter"}}, Path("test.toml"))
 
 
 if __name__ == "__main__":

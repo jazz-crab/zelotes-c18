@@ -149,6 +149,10 @@ def prepare_table(profile: int) -> bytes:
     return command(OP_PREPARE_TABLE, profile, 0x80)
 
 
+def prepare_buttons(profile: int) -> bytes:
+    return command(OP_PREPARE_BUTTONS, profile, 0x80)
+
+
 def commit(profile: int) -> bytes:
     return command(OP_COMMIT, profile)
 
@@ -168,6 +172,158 @@ def set_dpi_stage(profile: int, stage: int) -> bytes:
     if stage not in DPI_STAGE_OFFSETS:
         raise ProtocolError(f"DPI-стадия {stage} вне диапазона 1..5")
     return command(OP_DPI_STAGE, profile, stage)
+
+
+# --- buttons --------------------------------------------------------------- #
+# Offset of each physical button's 4-byte [type LE][value LE] pair. Button 11
+# sits out of numeric order, between 6 and 7 (vendor layout quirk).
+BUTTON_SLOTS = {
+    1: 0, 2: 4, 3: 8, 4: 12, 5: 16, 6: 20, 11: 24,
+    7: 32, 8: 36, 9: 40, 10: 44,
+}
+
+# Factory table (Restore Defaults capture). Bytes 28..31 and 48..63 are a
+# fixed trailer and are preserved as-is.
+BUTTON_DEFAULT_TABLE = bytes([
+    0x01, 0x00, 0xF0, 0x00, 0x01, 0x00, 0xF1, 0x00,
+    0x01, 0x00, 0xF2, 0x00, 0x01, 0x00, 0xF4, 0x00,
+    0x01, 0x00, 0xF3, 0x00, 0x07, 0x00, 0x03, 0x00,
+    0x00, 0x00, 0x2C, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x1A, 0x00, 0x00, 0x00, 0x16, 0x00,
+    0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x07, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x04, 0x00, 0x01, 0x00, 0x04, 0x00, 0x02, 0x00,
+])
+
+BUTTON_CLICKS = {
+    "left": 0xF0, "menu": 0xF1, "middle": 0xF2, "back": 0xF3,
+    "forward": 0xF4,
+}
+
+MEDIA_ACTIONS = {
+    "play-pause": 0xCD, "playpause": 0xCD, "stop": 0xB7,
+    "next": 0xB5, "prev": 0xB6, "previous": 0xB6,
+    "mute": 0xE2, "vol-up": 0xE9, "volume-up": 0xE9,
+    "vol-down": 0xEA, "volume-down": 0xEA,
+}
+
+DPI_ACTIONS = {"up": 0x01, "down": 0x02, "cycle": 0x03}
+PROFILE_ACTIONS = {"up": 0x01, "down": 0x02, "cycle": 0x03}
+
+MODIFIER_BITS = {"ctrl": 0x01, "shift": 0x02, "alt": 0x04, "win": 0x08}
+
+# USB HID keyboard usage codes (standard Keyboard/Keypad page).
+KEY_CODES: dict[str, int] = {
+    "enter": 0x28, "return": 0x28,
+    "esc": 0x29, "escape": 0x29,
+    "backspace": 0x2A,
+    "tab": 0x2B,
+    "space": 0x2C,
+    "capslock": 0x39,
+    "printscreen": 0x46, "prtsc": 0x46,
+    "insert": 0x49,
+    "home": 0x4A,
+    "pageup": 0x4B, "pgup": 0x4B,
+    "delete": 0x4C, "del": 0x4C,
+    "end": 0x4D,
+    "pagedown": 0x4E, "pgdn": 0x4E,
+    "right": 0x4F, "left": 0x50, "down": 0x51, "up": 0x52,
+    "minus": 0x2D, "plus": 0x2E,
+    "`": 0x35, "[" : 0x2F, "]" : 0x30, "\\": 0x31,
+    ";": 0x33, "'": 0x34, ",": 0x36, ".": 0x37, "/": 0x38,
+}
+for _i in range(1, 13):
+    KEY_CODES[f"f{_i}"] = 0x3A + _i - 1
+for _c in range(ord("a"), ord("z") + 1):
+    KEY_CODES[chr(_c)] = 0x04 + _c - ord("a")
+for _d in range(1, 10):
+    KEY_CODES[str(_d)] = 0x1E + _d - 1
+KEY_CODES["0"] = 0x27
+
+
+def _parse_shortcut(arg: str) -> tuple[int, int]:
+    parts = [part.strip().lower() for part in arg.split("+") if part.strip()]
+    if len(parts) < 2:
+        raise ProtocolError(
+            f"shortcut {arg!r}: нужен модификатор и клавиша, например ctrl+c"
+        )
+    *mods, key = parts
+    bits = 0
+    for name in mods:
+        if name not in MODIFIER_BITS:
+            raise ProtocolError(
+                f"shortcut {arg!r}: неизвестный модификатор {name!r} "
+                f"(есть: {', '.join(MODIFIER_BITS)})"
+            )
+        bits |= MODIFIER_BITS[name]
+    if key not in KEY_CODES:
+        raise ProtocolError(f"shortcut {arg!r}: неизвестная клавиша {key!r}")
+    return bits << 8, KEY_CODES[key]
+
+
+def parse_button_action(spec: str) -> tuple[int, int]:
+    """Turn ``"shortcut:ctrl+c"`` into the device's ``(type, value)`` pair.
+
+    Supported forms:
+    ``none``, ``click:<left|menu|middle|back|forward>``, ``key:<name>``,
+    ``shortcut:<mods>+<key>``, ``media:<name>``, ``dpi:<up|down|cycle>``,
+    ``profile:<up|down|cycle>``.
+    """
+    text = str(spec).strip().lower()
+    if text in ("", "none", "off", "disabled"):
+        return 0x0000, 0x0000
+    if ":" not in text:
+        raise ProtocolError(
+            f"кнопка {spec!r}: ожидалось действие вида click:left, key:enter, "
+            f"shortcut:ctrl+c, media:mute, dpi:cycle, profile:cycle или none"
+        )
+    kind, arg = text.split(":", 1)
+    arg = arg.strip()
+
+    if kind == "click":
+        if arg not in BUTTON_CLICKS:
+            raise ProtocolError(
+                f"click {arg!r}: есть {', '.join(BUTTON_CLICKS)}"
+            )
+        return 0x0001, BUTTON_CLICKS[arg]
+    if kind == "key":
+        if arg not in KEY_CODES:
+            raise ProtocolError(f"key {arg!r}: неизвестная клавиша")
+        return 0x0000, KEY_CODES[arg]
+    if kind == "shortcut":
+        return _parse_shortcut(arg)
+    if kind == "media":
+        if arg not in MEDIA_ACTIONS:
+            raise ProtocolError(
+                f"media {arg!r}: есть {', '.join(sorted(MEDIA_ACTIONS))}"
+            )
+        return 0x0003, MEDIA_ACTIONS[arg]
+    if kind == "dpi":
+        if arg not in DPI_ACTIONS:
+            raise ProtocolError("dpi: ожидалось up, down или cycle")
+        return 0x0007, DPI_ACTIONS[arg]
+    if kind == "profile":
+        if arg not in PROFILE_ACTIONS:
+            raise ProtocolError("profile: ожидалось up, down или cycle")
+        return 0x0008, PROFILE_ACTIONS[arg]
+    raise ProtocolError(
+        f"кнопка {spec!r}: неизвестный тип {kind!r} "
+        f"(есть: click, key, shortcut, media, dpi, profile, none)"
+    )
+
+
+def build_button_table(assignments: dict[int, str] | None = None) -> bytes:
+    """Build the full 64-byte button table, starting from factory defaults."""
+    table = bytearray(BUTTON_DEFAULT_TABLE)
+    for slot, spec in (assignments or {}).items():
+        slot = int(slot)
+        if slot not in BUTTON_SLOTS:
+            raise ProtocolError(f"кнопка {slot}: номер должен быть 1..11")
+        btype, value = parse_button_action(spec)
+        offset = BUTTON_SLOTS[slot]
+        table[offset:offset + 2] = btype.to_bytes(2, "little")
+        table[offset + 2:offset + 4] = value.to_bytes(2, "little")
+    return bytes(table)
 
 
 # --- 64-byte config packet ------------------------------------------------- #

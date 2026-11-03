@@ -16,8 +16,9 @@ usage_page = 0xFF00
 usage = 0xFF00
 
 [profile]
-# Мышь хранит два профиля. Подсветка и DPI привязаны к профилю, поэтому по
-# умолчанию пишем в оба. После записи активным останется profile.select.
+# Мышь хранит два профиля. Подсветка, DPI и кнопки привязаны к профилю,
+# поэтому по умолчанию пишем в оба. После записи активным останется
+# profile.select.
 targets = [1, 2]
 select = 1
 
@@ -34,15 +35,38 @@ brightness = "high"
 speed = "mid"
 
 [polling]
-enabled = true
+# Пока не трогаем: мышь остаётся на той частоте, что стоит сейчас.
+enabled = false
 # 125 | 250 | 500 | 1000
 hz = 1000
 
 [dpi]
 # 1..5 — какая стадия активна после записи.
 active_stage = 1
-# Ровно 5 стадий, 200..10000. Кодируются калибровочной таблицей протокола.
-# Значения подобраны так, чтобы давать те же байты, что и заводская таблица
-# (0x22 0x39 0x5c 0xd0 0xf3) — то есть запись не меняет DPI «из коробки».
-# Меняй осознанно: DPI пишется в том же пакете, что и подсветка.
-stages = [1520, 2500, 4000, 7000, 10000]
+# Пять стадий, 200..10000. Чтобы DPI-кнопка не меняла чувствительность,
+# все стадии одинаковые. Поменяй список, если нужны разные ступени.
+stages = [2500, 2500, 2500, 2500, 2500]
+
+# Кнопки. Номера — как в вендорской утилите (1..11); неперечисленные остаются
+# заводскими. Форматы действий:
+#   click:left|menu|middle|back|forward
+#   key:<enter|esc|tab|space|delete|home|end|pageup|pagedown|printscreen|f1..f12|a..z|0..9>
+#   shortcut:<ctrl|shift|alt|win>+<клавиша>   (например shortcut:ctrl+c)
+#   media:<play-pause|stop|next|prev|mute|vol-up|vol-down>
+#   dpi:<up|down|cycle>, profile:<up|down|cycle>
+#   none — кнопка ничего не делает.
+#
+# Заводские значения: 1 left, 2 menu, 3 middle, 4 forward, 5 back,
+# 6 DPI cycle, 7 W, 8 S, 9 A, 10 D, 11 Space.
+[buttons]
+1 = "click:left"
+2 = "click:menu"
+3 = "click:middle"
+4 = "shortcut:ctrl+v"          # paste
+5 = "shortcut:ctrl+c"          # copy
+6 = "media:play-pause"         # вместо DPI cycle
+7 = "shortcut:alt+tab"         # переключение окон
+8 = "key:enter"
+9 = "shortcut:ctrl+z"          # отменить
+10 = "shortcut:win+shift+s"    # скриншот области
+11 = "key:printscreen"         # скриншот всего экрана

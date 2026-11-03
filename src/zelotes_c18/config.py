@@ -15,6 +15,8 @@ from .protocol import (
     EFFECTS,
     POLLING_INTERVALS,
     SPEEDS,
+    ProtocolError,
+    parse_button_action,
 )
 
 VALID_PROFILES = (1, 2)
@@ -58,6 +60,7 @@ class Config:
     lighting: LightingConfig = field(default_factory=LightingConfig)
     polling: PollingConfig = field(default_factory=PollingConfig)
     dpi: DpiConfig = field(default_factory=DpiConfig)
+    buttons: dict[int, str] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: str | Path) -> "Config":
@@ -91,6 +94,7 @@ class Config:
             lighting=_lighting(raw.get("lighting", {})),
             polling=_polling(raw.get("polling", {})),
             dpi=_dpi(raw.get("dpi", {})),
+            buttons=_buttons(raw.get("buttons", {})),
         )
         cfg._validate()
         return cfg
@@ -138,6 +142,13 @@ class Config:
         for value in self.dpi.stages:
             if not (200 <= value <= 10000):
                 raise ConfigError("dpi.stages: каждое значение 200..10000")
+        for slot, spec in self.buttons.items():
+            if not (1 <= slot <= 11):
+                raise ConfigError(f"buttons.{slot}: номер кнопки должен быть 1..11")
+            try:
+                parse_button_action(spec)
+            except ProtocolError as exc:
+                raise ConfigError(f"buttons.{slot}: {exc}") from None
 
 
 # --------------------------------------------------------------------------- #
@@ -204,3 +215,20 @@ def _dpi(raw: dict) -> DpiConfig:
         active_stage=_as_int(raw.get("active_stage", 1), "dpi.active_stage"),
         stages=tuple(_as_int(v, "dpi.stages") for v in stages),
     )
+
+
+def _buttons(raw: dict) -> dict[int, str]:
+    if not isinstance(raw, dict):
+        raise ConfigError("секция [buttons] должна быть таблицей")
+    result: dict[int, str] = {}
+    for key, value in raw.items():
+        try:
+            slot = int(key)
+        except (TypeError, ValueError):
+            raise ConfigError(
+                f"buttons: ключ {key!r} не номер кнопки (нужно 1..11)"
+            ) from None
+        if not isinstance(value, str):
+            raise ConfigError(f"buttons.{slot}: ожидалась строка-действие")
+        result[slot] = value
+    return result
