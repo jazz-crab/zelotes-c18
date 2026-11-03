@@ -108,7 +108,7 @@ def cmd_status(cfg: Config, args) -> int:
         with Mouse(cfg.vid, cfg.pid, cfg.interface,
                    cfg.usage_page, cfg.usage) as mouse:
             print(f"  {mouse.describe()}")
-            print(f"  путь: {mouse.path}")
+            print(f"  путь: {mouse.path_str}")
             try:
                 echo = mouse.feature_echo()
                 print(f"  GET_REPORT: {echo.hex(' ')}")
@@ -149,7 +149,7 @@ def cmd_probe(cfg: Config, args) -> int:
     with Mouse(cfg.vid, cfg.pid, cfg.interface,
                cfg.usage_page, cfg.usage) as mouse:
         print(f"  {mouse.describe()}")
-        print(f"  путь: {mouse.path}")
+        print(f"  путь: {mouse.path_str}")
         descriptor = mouse.report_descriptor()
         print(f"  report descriptor ({len(descriptor)} байт):")
         _print_hex(descriptor, indent="    ")
