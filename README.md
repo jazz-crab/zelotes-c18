@@ -118,7 +118,19 @@ powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass `
   -File "C:\Users\JazzCrab\zelotes-c18\tools\win-scroll-volume.ps1"
 ```
 
-Автозапуск: `Win+R` → `shell:startup` → ярлык с этой командой.
+Автозапуск ставится и снимается самим скриптом (ярлык в `shell:startup`):
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File "C:\Users\JazzCrab\zelotes-c18\tools\win-scroll-volume.ps1" -Install
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File "C:\Users\JazzCrab\zelotes-c18\tools\win-scroll-volume.ps1" -Uninstall
+```
+
+`-Uninstall` заодно останавливает уже запущенный хук. Ярлык называется
+`WinScrollVolume.lnk` и лежит в папке автозапуска текущего пользователя —
+права администратора не нужны.
 
 Скрипт ставит низкоуровневый хук мыши (`WH_MOUSE_LL` через встроенный .NET) и
 шлёт `VK_VOLUME_UP` / `VK_VOLUME_DOWN` только когда зажат Win. Обычный скролл

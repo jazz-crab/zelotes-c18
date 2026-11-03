@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 <#
 .SYNOPSIS
     Win + колесо мыши -> громкость, без AutoHotkey.
@@ -12,13 +12,17 @@
         powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass `
             -File "...\tools\win-scroll-volume.ps1"
 
-    Автозапуск: Win+R -> shell:startup -> ярлык на команду выше.
+    Установить/убрать автозапуск (ярлык в shell:startup):
+        ... -File "...\tools\win-scroll-volume.ps1" -Install
+        ... -File "...\tools\win-scroll-volume.ps1" -Uninstall
 
     Ограничения те же, что у любого хост-хука: игры с raw input и окна,
     запущенные от администратора, хоткей не увидят (если скрипт не elevated).
 #>
 param(
-    [switch]$CompileOnly
+    [switch]$CompileOnly,
+    [switch]$Install,
+    [switch]$Uninstall
 )
 
 $source = @'
@@ -156,6 +160,48 @@ public static class WinScrollVolume
 '@
 
 Add-Type -TypeDefinition $source -Language CSharp
+
+$startupDir = [Environment]::GetFolderPath('Startup')
+$shortcutPath = Join-Path $startupDir 'WinScrollVolume.lnk'
+$powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$shortcutArgs = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $PSCommandPath
+
+if ($Uninstall) {
+    if (Test-Path $shortcutPath) {
+        Remove-Item $shortcutPath -Force
+        Write-Host "Удалён автозапуск: $shortcutPath"
+    } else {
+        Write-Host "Автозапуск не был установлен."
+    }
+
+    $hookPattern = '-File\s+"?' + [regex]::Escape($PSCommandPath) + '"?'
+    Get-CimInstance Win32_Process |
+        Where-Object {
+            $_.ProcessId -ne $PID -and
+            $_.CommandLine -and
+            $_.CommandLine -match $hookPattern -and
+            $_.CommandLine -notmatch '-Install|-Uninstall|-CompileOnly'
+        } |
+        ForEach-Object {
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            Write-Host "Остановлен процесс PID $($_.ProcessId)."
+        }
+    exit 0
+}
+
+if ($Install) {
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($shortcutPath)
+    $shortcut.TargetPath = $powershellExe
+    $shortcut.Arguments = $shortcutArgs
+    $shortcut.WorkingDirectory = Split-Path $PSCommandPath
+    $shortcut.WindowStyle = 7
+    $shortcut.Description = 'Win + колесо мыши -> громкость'
+    $shortcut.Save()
+    Write-Host "Автозапуск установлен: $shortcutPath"
+    Write-Host "Запустить сейчас: $powershellExe $shortcutArgs"
+    exit 0
+}
 
 if (-not $CompileOnly) {
     Write-Host "Win + колесо -> громкость. Ctrl+C или закрыть окно, чтобы остановить."
