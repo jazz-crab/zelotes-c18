@@ -218,12 +218,19 @@ class Mouse:
         self.send_command(commit(profile), delay=0.050)
 
     def transaction_buttons(self, profile: int, table: bytes) -> None:
-        """begin -> 0x0D -> 64-byte table (no primer) -> commit."""
+        """begin -> 0x0D -> 64-byte table -> zero completion -> commit.
+
+        The device waits for an explicit zero-length completion report after
+        the button table. libusb sends it as part of the transfer, but
+        HIDAPI/Windows does not, so the table write never finishes and the
+        firmware stops scanning input until the packet arrives.
+        """
         if len(table) != PAYLOAD_SIZE:
             raise ValueError(f"таблица кнопок должна быть {PAYLOAD_SIZE} байт")
         self.send_command(BEGIN)
         self.send_command(prepare_buttons(profile))
         self.write_payload(table, delay=0.040)
+        self.write_payload(bytes(PAYLOAD_SIZE), delay=0.040)
         self.send_command(commit(profile), delay=0.050)
 
     # --- read-only diagnostics --------------------------------------------- #
