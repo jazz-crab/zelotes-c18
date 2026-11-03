@@ -1,0 +1,15 @@
+# generated / local only
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

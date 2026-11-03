@@ -1,0 +1,44 @@
+# Zelotes C-18 (SOAI C18) — целевое состояние устройства.
+#
+# Это источник истины: `c18 apply --yes` приводит мышь к этому файлу.
+# Конфиг описывает намерение, а не снимок устройства: у мыши нет чтения
+# конфигурации, поэтому backup/verify невозможны. Подробности — PROVISIONING.md.
+
+[device]
+vid = 0x12C9
+pid = 0x2003
+interface = 2
+usage_page = 0xFF00
+usage = 0xFF00
+
+[profile]
+# Мышь хранит два профиля. Подсветка, вероятно, тоже per-profile, поэтому по
+# умолчанию пишем в оба. После записи активным останется profile.select.
+targets = [1, 2]
+select = 1
+
+[lighting]
+enabled = true
+# off | static | breathing | neon | wave | flowing
+mode = "off"
+# Только для static. Железо хранит бинарную маску каналов, а не 8-битный RGB,
+# поэтому доступны только эти цвета: red, green, blue, yellow, purple, cyan,
+# white, off.
+color = "red"
+# Только для static: high | mid | low.
+brightness = "high"
+# Для эффектов: fast | mid | slow.
+speed = "mid"
+
+[polling]
+enabled = true
+# 125 | 250 | 500 | 1000
+hz = 1000
+
+[dpi]
+enabled = true
+# 1..5 — какая стадия активна после записи.
+active_stage = 1
+# Ровно 5 стадий, 200..10000. Это не произвольные числа: они кодируются
+# калибровочной таблицей протокола.
+stages = [800, 1200, 1600, 2400, 3200]
