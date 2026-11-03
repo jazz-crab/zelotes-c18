@@ -107,17 +107,30 @@ HID-протоколе нет ни команды, ни поля для неё. 
   consumer-control и всегда шлёт Volume Up/Down — это не «колесо с
   модификатором».
 
-Рабочий путь — хост-хук. В репозитории лежит готовый скрипт
-[`tools/win-scroll-volume.ahk`](tools/win-scroll-volume.ahk):
+Рабочий путь — хост-хук. AHK не обязателен: в репозитории есть скрипт на
+встроенном PowerShell, без установки чего-либо —
+[`tools/win-scroll-volume.ps1`](tools/win-scroll-volume.ps1).
 
-```ahk
-#WheelUp::Send "{Volume_Up}"
-#WheelDown::Send "{Volume_Down}"
+Запуск без окна:
+
+```powershell
+powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass `
+  -File "C:\Users\JazzCrab\zelotes-c18\tools\win-scroll-volume.ps1"
 ```
 
-Нужен [AutoHotkey v2](https://www.autohotkey.com/); положи скрипт в автозапуск.
-Не работает в играх с raw input и в окнах, запущенных от администратора (если
-AHK не elevated). Зато ничего не прошивается и откат — просто закрыть скрипт.
+Автозапуск: `Win+R` → `shell:startup` → ярлык с этой командой.
+
+Скрипт ставит низкоуровневый хук мыши (`WH_MOUSE_LL` через встроенный .NET) и
+шлёт `VK_VOLUME_UP` / `VK_VOLUME_DOWN` только когда зажат Win. Обычный скролл
+не трогает: без Win событие уходит дальше.
+
+Тот же хук есть в виде AHK-скрипта
+[`tools/win-scroll-volume.ahk`](tools/win-scroll-volume.ahk) — он короче и
+чуть легче, но требует установки [AutoHotkey v2](https://www.autohotkey.com/).
+
+Ограничения у обоих одинаковые: игры с raw input и окна, запущенные от
+администратора, хоткей не увидят (если хук не запущен elevated). Ничего не
+прошивается; откат — закрыть скрипт.
 
 ## Что настраивается
 
@@ -214,7 +227,8 @@ zelotes-c18/
 │   ├── config.py             # разбор и валидация TOML
 │   └── cli.py                # status / probe / apply / off
 ├── tools/probe.py            # автономная диагностика HID
-├── tools/win-scroll-volume.ahk  # Win+Scroll -> громкость (AutoHotkey)
+├── tools/win-scroll-volume.ps1  # Win+Scroll -> громкость (PowerShell, без установки)
+├── tools/win-scroll-volume.ahk  # то же на AutoHotkey (опционально)
 ├── tests/                    # проверки протокола и конфига без устройства
 ├── docs/PROTOCOL.md          # формат отчётов, режимы, DPI
 ├── PROVISIONING.md           # регламент записи (Windows)

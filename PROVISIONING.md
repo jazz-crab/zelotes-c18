@@ -332,7 +332,8 @@ c18 apply --yes
 
 Win+Scroll → громкость прошивкой не делается (колесо — HID-ось, а состояние
 Win на клавиатуре мыши недоступно). Это только хост-хук:
-`tools/win-scroll-volume.ahk` для AutoHotkey v2.
+`tools/win-scroll-volume.ps1` (PowerShell, без установки) или
+`tools/win-scroll-volume.ahk` (AutoHotkey v2).
 
 Отдельный случай: первая версия записи таблицы кнопок не отправляла
 завершающий нулевой пакет, и мышь зависла — USB и подсветка живы, но ввод
