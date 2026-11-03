@@ -1,19 +1,20 @@
 ﻿#requires -Version 5.1
 <#
 .SYNOPSIS
-    Win + колесо мыши -> громкость, без AutoHotkey.
+    Колесо мыши с модификатором -> громкость, без AutoHotkey.
 
 .DESCRIPTION
-    Ставит низкоуровневый хук мыши (WH_MOUSE_LL) через встроенный .NET и
-    шлёт VK_VOLUME_UP / VK_VOLUME_DOWN, когда колесо крутят с зажатым Win.
-    Обычный скролл не трогает.
+    Ставит низкоуровневый хук мыши через встроенный .NET. По умолчанию
+    работает Alt + колесо (Alt при отпускании ничего не открывает).
+    Флаг -Win переключает на Win + колесо; там дополнительно отправляется
+    пустое нажатие Ctrl, чтобы Windows не открыла «Пуск» на отпускании Win.
 
     Запуск (без окна):
         powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass `
             -File "...\tools\win-scroll-volume.ps1"
 
     Установить/убрать автозапуск (ярлык в shell:startup):
-        ... -File "...\tools\win-scroll-volume.ps1" -Install
+        ... -File "...\tools\win-scroll-volume.ps1" -Install [-Win]
         ... -File "...\tools\win-scroll-volume.ps1" -Uninstall
 
     Ограничения те же, что у любого хост-хука: игры с raw input и окна,
@@ -22,7 +23,8 @@
 param(
     [switch]$CompileOnly,
     [switch]$Install,
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    [switch]$Win
 )
 
 $source = @'
@@ -37,9 +39,15 @@ public static class WinScrollVolume
     private const int WM_MOUSEWHEEL = 0x020A;
     private const int VK_LWIN = 0x5B;
     private const int VK_RWIN = 0x5C;
+    private const int VK_SHIFT = 0x10;
+    private const int VK_CONTROL = 0x11;
+    private const int VK_MENU = 0x12;
+    private const int VK_F24 = 0x87;
     private const byte VK_VOLUME_UP = 0xAF;
     private const byte VK_VOLUME_DOWN = 0xAE;
     private const uint KEYEVENTF_KEYUP = 0x0002;
+
+    public static bool UseWin = false;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT
@@ -71,14 +79,14 @@ public static class WinScrollVolume
         public uint lPrivate;
     }
 
-    private delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
+    private delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);
 
-    private static readonly LowLevelMouseProc proc = HookCallback;
-    private static IntPtr hookID = IntPtr.Zero;
+    private static readonly HookProc mouseProc = MouseCallback;
+    private static IntPtr mouseHook = IntPtr.Zero;
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern IntPtr SetWindowsHookEx(
-        int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
+        int idHook, HookProc lpfn, IntPtr hMod, uint dwThreadId);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool UnhookWindowsHookEx(IntPtr hhk);
@@ -107,10 +115,16 @@ public static class WinScrollVolume
     [DllImport("user32.dll")]
     private static extern IntPtr DispatchMessage(ref MSG lpMsg);
 
-    private static bool WinDown()
+    private static bool Down(int vk)
     {
-        return (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0
-            || (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
+        return (GetAsyncKeyState(vk) & 0x8000) != 0;
+    }
+
+    private static bool ModifierDown()
+    {
+        if (UseWin)
+            return Down(VK_LWIN) || Down(VK_RWIN);
+        return Down(VK_MENU);
     }
 
     private static void Tap(byte vk)
@@ -119,20 +133,50 @@ public static class WinScrollVolume
         keybd_event(vk, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
     }
 
-    private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+    // Для режима Win: Windows открывает «Пуск» на отпускании Win, если за
+    // время удержания не было обычного нажатия клавиши. Медиа-клавиши она не
+    // считает, поэтому жмём нейтральный модификатор, который не занят.
+    private static byte DummyKey()
     {
-        if (nCode >= 0 && wParam == (IntPtr)WM_MOUSEWHEEL && WinDown())
+        if (!Down(VK_CONTROL)) return (byte)VK_CONTROL;
+        if (!Down(VK_SHIFT)) return (byte)VK_SHIFT;
+        if (!Down(VK_MENU)) return (byte)VK_MENU;
+        return (byte)VK_F24;
+    }
+
+    private static void Log(string text)
+    {
+        string path = Environment.GetEnvironmentVariable("WIN_SCROLL_VOLUME_LOG");
+        if (string.IsNullOrEmpty(path)) return;
+        try
+        {
+            System.IO.File.AppendAllText(
+                path, DateTime.Now.ToString("HH:mm:ss.fff") + " " + text + "\r\n");
+        }
+        catch
+        {
+        }
+    }
+
+    private static IntPtr MouseCallback(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        if (nCode >= 0 && wParam == (IntPtr)WM_MOUSEWHEEL && ModifierDown())
         {
             MSLLHOOKSTRUCT data =
                 (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
             int delta = (short)((data.mouseData >> 16) & 0xFFFF);
+
+            if (UseWin)
+                Tap(DummyKey());
             if (delta > 0)
                 Tap(VK_VOLUME_UP);
             else if (delta < 0)
                 Tap(VK_VOLUME_DOWN);
+
+            Log("wheel delta=" + delta + " mode=" + (UseWin ? "win" : "alt"));
             return (IntPtr)1; // съедаем скролл, иначе страница тоже поедет
         }
-        return CallNextHookEx(hookID, nCode, wParam, lParam);
+        return CallNextHookEx(mouseHook, nCode, wParam, lParam);
     }
 
     public static void Run()
@@ -140,11 +184,11 @@ public static class WinScrollVolume
         using (Process current = Process.GetCurrentProcess())
         using (ProcessModule module = current.MainModule)
         {
-            hookID = SetWindowsHookEx(
-                WH_MOUSE_LL, proc, GetModuleHandle(module.ModuleName), 0);
+            mouseHook = SetWindowsHookEx(
+                WH_MOUSE_LL, mouseProc, GetModuleHandle(module.ModuleName), 0);
         }
 
-        if (hookID == IntPtr.Zero)
+        if (mouseHook == IntPtr.Zero)
             throw new Win32Exception(Marshal.GetLastWin32Error());
 
         MSG msg;
@@ -154,17 +198,21 @@ public static class WinScrollVolume
             DispatchMessage(ref msg);
         }
 
-        UnhookWindowsHookEx(hookID);
+        UnhookWindowsHookEx(mouseHook);
     }
 }
 '@
 
 Add-Type -TypeDefinition $source -Language CSharp
+[WinScrollVolume]::UseWin = [bool]$Win
 
 $startupDir = [Environment]::GetFolderPath('Startup')
 $shortcutPath = Join-Path $startupDir 'WinScrollVolume.lnk'
 $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $shortcutArgs = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $PSCommandPath
+if ($Win) {
+    $shortcutArgs += ' -Win'
+}
 
 if ($Uninstall) {
     if (Test-Path $shortcutPath) {
@@ -196,7 +244,7 @@ if ($Install) {
     $shortcut.Arguments = $shortcutArgs
     $shortcut.WorkingDirectory = Split-Path $PSCommandPath
     $shortcut.WindowStyle = 7
-    $shortcut.Description = 'Win + колесо мыши -> громкость'
+    $shortcut.Description = 'Колесо + модификатор -> громкость'
     $shortcut.Save()
     Write-Host "Автозапуск установлен: $shortcutPath"
     Write-Host "Запустить сейчас: $powershellExe $shortcutArgs"
@@ -204,6 +252,7 @@ if ($Install) {
 }
 
 if (-not $CompileOnly) {
-    Write-Host "Win + колесо -> громкость. Ctrl+C или закрыть окно, чтобы остановить."
+    $mode = if ($Win) { 'Win' } else { 'Alt' }
+    Write-Host "$mode + колесо -> громкость. Ctrl+C или закрыть окно, чтобы остановить."
     [WinScrollVolume]::Run()
 }
