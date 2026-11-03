@@ -11,7 +11,10 @@ No driver replacement (Zadig/WinUSB) and no administrator rights are needed.
 """
 from __future__ import annotations
 
+import ctypes
+import sys
 import time
+from ctypes import wintypes
 
 import hid
 
@@ -36,6 +39,95 @@ class TransportError(RuntimeError):
     """A HID transfer was rejected by the device or the OS."""
 
 
+class _HIDP_CAPS(ctypes.Structure):
+    _fields_ = [
+        ("Usage", wintypes.USHORT),
+        ("UsagePage", wintypes.USHORT),
+        ("InputReportByteLength", wintypes.USHORT),
+        ("OutputReportByteLength", wintypes.USHORT),
+        ("FeatureReportByteLength", wintypes.USHORT),
+        ("Reserved", wintypes.USHORT * 17),
+        ("NumberLinkCollectionNodes", wintypes.USHORT),
+        ("NumberInputButtonCaps", wintypes.USHORT),
+        ("NumberInputValueCaps", wintypes.USHORT),
+        ("NumberInputDataIndices", wintypes.USHORT),
+        ("NumberOutputButtonCaps", wintypes.USHORT),
+        ("NumberOutputValueCaps", wintypes.USHORT),
+        ("NumberOutputDataIndices", wintypes.USHORT),
+        ("NumberFeatureButtonCaps", wintypes.USHORT),
+        ("NumberFeatureValueCaps", wintypes.USHORT),
+        ("NumberFeatureDataIndices", wintypes.USHORT),
+    ]
+
+
+def windows_report_caps(path: str) -> dict | None:
+    """Ask Windows for the report lengths (hidapi does not expose HidP_GetCaps).
+
+    Returns ``None`` on non-Windows or if the device cannot be queried.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        hid_dll = ctypes.WinDLL("hid", use_last_error=True)
+        k32.CreateFileW.restype = wintypes.HANDLE
+        k32.CreateFileW.argtypes = [
+            wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+            wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+        ]
+        hid_dll.HidD_GetPreparsedData.argtypes = [
+            wintypes.HANDLE, ctypes.POINTER(ctypes.c_void_p),
+        ]
+        hid_dll.HidP_GetCaps.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(_HIDP_CAPS),
+        ]
+        hid_dll.HidD_FreePreparsedData.argtypes = [ctypes.c_void_p]
+    except (AttributeError, OSError):
+        return None
+
+    handle = k32.CreateFileW(path, 0, 3, None, 3, 0x40000000, None)
+    if handle == wintypes.HANDLE(-1).value:
+        return None
+    try:
+        pp = ctypes.c_void_p()
+        if not hid_dll.HidD_GetPreparsedData(wintypes.HANDLE(handle),
+                                            ctypes.byref(pp)):
+            return None
+        try:
+            caps = _HIDP_CAPS()
+            if hid_dll.HidP_GetCaps(pp, ctypes.byref(caps)) != 0x00110000:
+                return None
+            return {
+                "usage_page": caps.UsagePage,
+                "usage": caps.Usage,
+                "input": caps.InputReportByteLength,
+                "output": caps.OutputReportByteLength,
+                "feature": caps.FeatureReportByteLength,
+            }
+        finally:
+            hid_dll.HidD_FreePreparsedData(pp)
+    finally:
+        k32.CloseHandle(wintypes.HANDLE(handle))
+
+
+def find_vendor_info(vid: int, pid: int, interface: int = 2,
+                     usage_page: int = VENDOR_USAGE_PAGE,
+                     usage: int = VENDOR_USAGE) -> dict | None:
+    """Return the HID info of the vendor collection, or ``None``."""
+    candidates = hid.enumerate(vid, pid)
+    for info in candidates:
+        if (info.get("interface_number") == interface
+                and info.get("usage_page") == usage_page
+                and info.get("usage") == usage):
+            return info
+    # Fall back to interface number only: some Windows builds report a
+    # different usage pair for the same vendor collection.
+    for info in candidates:
+        if info.get("interface_number") == interface:
+            return info
+    return None
+
+
 class Mouse:
     def __init__(self, vid: int, pid: int, interface: int = 2,
                  usage_page: int = VENDOR_USAGE_PAGE,
@@ -49,21 +141,8 @@ class Mouse:
         self._open(usage_page, usage)
 
     def _open(self, usage_page: int, usage: int) -> None:
-        candidates = hid.enumerate(self.vid, self.pid)
-        chosen = None
-        for info in candidates:
-            if (info.get("interface_number") == self.interface
-                    and info.get("usage_page") == usage_page
-                    and info.get("usage") == usage):
-                chosen = info
-                break
-        if chosen is None:
-            # Fall back to interface number only: some Windows builds report a
-            # different usage pair for the same vendor collection.
-            for info in candidates:
-                if info.get("interface_number") == self.interface:
-                    chosen = info
-                    break
+        chosen = find_vendor_info(self.vid, self.pid, self.interface,
+                                  usage_page, usage)
         if chosen is None:
             raise DeviceNotFound(
                 f"не найден вендорский HID-интерфейс мыши "
@@ -150,13 +229,10 @@ class Mouse:
         assert self.h is not None
         return bytes(self.h.get_feature_report(0, REPORT_SIZE + 1))
 
-    def caps(self) -> dict:
-        assert self.h is not None
-        # hidapi does not expose HidP_GetCaps; report what Windows accepts.
-        return {
-            "output_report": PAYLOAD_SIZE + 1,
-            "feature_report": REPORT_SIZE + 1,
-        }
+    @property
+    def path_str(self) -> str:
+        path = self.path
+        return path.decode() if isinstance(path, bytes) else str(path)
 
     def describe(self) -> str:
         info = self.info

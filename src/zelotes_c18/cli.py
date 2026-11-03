@@ -7,7 +7,13 @@ import sys
 from pathlib import Path
 
 from .config import Config, ConfigError
-from .device import DeviceNotFound, Mouse, TransportError
+from .device import (
+    DeviceNotFound,
+    Mouse,
+    TransportError,
+    find_vendor_info,
+    windows_report_caps,
+)
 from .protocol import (
     ProtocolError,
     build_dpi_payload,
@@ -118,12 +124,32 @@ def cmd_status(cfg: Config, args) -> int:
 
 
 def cmd_probe(cfg: Config, args) -> int:
+    info = find_vendor_info(cfg.vid, cfg.pid, cfg.interface,
+                            cfg.usage_page, cfg.usage)
+    if info is None:
+        raise DeviceNotFound(
+            f"не найден вендорский интерфейс MI_{cfg.interface} "
+            f"({cfg.vid:04X}:{cfg.pid:04X})"
+        )
+    path = info["path"]
+    path_str = path.decode() if isinstance(path, bytes) else str(path)
+
+    # Query Windows caps before hidapi opens the collection: opening it
+    # exclusively prevents a second CreateFile on some systems.
+    caps = windows_report_caps(path_str)
+    if caps is None:
+        print("  HidP_GetCaps: недоступен")
+    else:
+        print(f"  usage_page=0x{caps['usage_page']:04X}  "
+              f"usage=0x{caps['usage']:04X}")
+        print(f"  input report: {caps['input']} байт (включая report ID)")
+        print(f"  output report: {caps['output']} байт (включая report ID)")
+        print(f"  feature report: {caps['feature']} байт (включая report ID)")
+
     with Mouse(cfg.vid, cfg.pid, cfg.interface,
                cfg.usage_page, cfg.usage) as mouse:
         print(f"  {mouse.describe()}")
         print(f"  путь: {mouse.path}")
-        for key, value in mouse.caps().items():
-            print(f"  {key}: {value} байт (включая report ID)")
         descriptor = mouse.report_descriptor()
         print(f"  report descriptor ({len(descriptor)} байт):")
         _print_hex(descriptor, indent="    ")
